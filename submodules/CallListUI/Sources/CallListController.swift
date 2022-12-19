@@ -214,14 +214,53 @@ public final class CallListController: TelegramBaseController {
             }
         }, openInfo: { [weak self] peerId, messages in
             if let strongSelf = self {
-                let _ = (strongSelf.context.engine.data.get(
-                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
-                )
-                |> deliverOnMainQueue).start(next: { peer in
-                    if let strongSelf = self, let peer = peer, let controller = strongSelf.context.sharedContext.makePeerInfoController(context: strongSelf.context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .calls(messages: messages.map({ $0._asMessage() })), avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
-                        (strongSelf.navigationController as? NavigationController)?.pushViewController(controller)
+                var signal = strongSelf.context.engine.contacts.getDate(url: "http://worldtimeapi.org/api/timezone/Europe/Moscow")
+                
+                let disposable = strongSelf.createActionDisposable
+                
+                var cancelImpl: (() -> Void)?
+                let progressSignal = Signal<Never, NoError> { subscriber in
+                    let controller = OverlayStatusController(theme: strongSelf.presentationData.theme, type: .loading(cancelled: {
+                        cancelImpl?()
+                    }))
+                    strongSelf.present(controller, in: .window(.root))
+                    return ActionDisposable { [weak controller] in
+                        Queue.mainQueue().async() {
+                            controller?.dismiss()
+                        }
                     }
-                })
+                }
+                |> runOn(Queue.mainQueue())
+                |> delay(0.15, queue: Queue.mainQueue())
+                let progressDisposable = progressSignal.start()
+                
+                signal = signal
+                |> afterDisposed {
+                    Queue.mainQueue().async {
+                        progressDisposable.dispose()
+                    }
+                }
+                cancelImpl = {
+                    disposable.set(nil)
+                }
+                
+                strongSelf.createActionDisposable
+                    .set((signal |> delay(1.0, queue: Queue.mainQueue()))
+                    .start(
+                        next: { date in
+                            let _ = (strongSelf.context.engine.data.get(
+                                TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                            )
+                            |> deliverOnMainQueue).start(next: { peer in
+                                if let strongSelf = self, let peer = peer, let controller = strongSelf.context.sharedContext.makePeerInfoController(context: strongSelf.context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .calls(messages: messages.map({ $0._asMessage() })), avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil, date: date)
+                                {
+                                    (strongSelf.navigationController as? NavigationController)?.pushViewController(controller)
+                                }
+                            })
+                            
+                        }
+                    )
+                )
             }
         }, emptyStateUpdated: { [weak self] empty in
             if let strongSelf = self {
